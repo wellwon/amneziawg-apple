@@ -107,6 +107,7 @@ func wgTurnOn(settings *C.char, tunFd int32) int32 {
 		return -1
 	}
 	logger.Verbosef("Attaching to interface")
+	tun = wrapTunIfEnabled(tun, logger.Verbosef) // AVPN split-DNS форвардер (dnsfwd.go); no-op если выключен
 	dev := device.NewDevice(tun, conn.NewStdNetBind(), logger)
 
 	err = dev.IpcSet(C.GoString(settings))
