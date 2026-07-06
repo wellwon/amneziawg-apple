@@ -32,4 +32,8 @@ extern char *LibXrayStopXray();
 extern char *LibXrayXrayVersion();
 extern char* LibXraySetSockCallback(libxray_sockcallback cb, void* ctx);
 
+/* AVPN split-DNS форвардер (dnsfwd.go): настроить ДО wgTurnOn; enabled=0 = сброс. 0=ok, -1=bad args */
+extern int32_t wgSetSplitDns(const char *suffixesCsv, const char *directServer,
+                             const char *tunnelServer, const char *clientIp, int32_t enabled);
+
 #endif
