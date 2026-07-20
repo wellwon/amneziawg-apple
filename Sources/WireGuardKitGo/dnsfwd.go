@@ -34,6 +34,7 @@ type splitDNSConfig struct {
 	tunnelSrv netip.Addr // 1.1.1.1 — остальное, через туннель
 	virtIP    netip.Addr // 100.100.100.53 — виртуальный резолвер, который видит система
 	clientIP  netip.Addr // адрес интерфейса клиента (src синтезированных пакетов)
+	warmup    bool       // прогрев WG-рукопожатия при подъёме (иначе первый DNS ловит холодный туннель)
 }
 
 var (
@@ -42,7 +43,7 @@ var (
 )
 
 //export wgSetSplitDns
-func wgSetSplitDns(suffixesCsv *C.char, directServer *C.char, tunnelServer *C.char, clientIp *C.char, enabled int32) int32 {
+func wgSetSplitDns(suffixesCsv *C.char, directServer *C.char, tunnelServer *C.char, clientIp *C.char, enabled int32, warmup int32) int32 {
 	splitDNSMu.Lock()
 	defer splitDNSMu.Unlock()
 	if enabled == 0 {
@@ -71,6 +72,7 @@ func wgSetSplitDns(suffixesCsv *C.char, directServer *C.char, tunnelServer *C.ch
 	splitDNSCfg = &splitDNSConfig{
 		enabled: true, suffixes: suf,
 		directSrv: direct, tunnelSrv: tunnelS, virtIP: virt, clientIP: client,
+		warmup: warmup != 0,
 	}
 	return 0
 }
@@ -252,6 +254,11 @@ const (
 	fwdEphSpan  = 4000
 	fwdOutDepth = 512
 	fwdTimeout  = 3 * time.Second
+	// Прогрев: sport ВНЕ mux-диапазона [fwdEphBase, fwdEphBase+fwdEphSpan) → ответ (если придёт)
+	// не матчится в Write и уходит в real; ОС его отбросит (нет ожидающего сокета). Пауза даёт
+	// device.Up() поднять RoutineReadFromTUN до инжекта (канал буферизован — потери нет, но чище).
+	warmupSport = 50000
+	warmupDelay = 150 * time.Millisecond
 )
 
 // wrapTunIfEnabled: точка входа из wgTurnOn (// AVPN в api-apple.go).
@@ -268,10 +275,47 @@ func wrapTunIfEnabled(real tun.Device, logf func(format string, args ...interfac
 		offset: -1,
 	}
 	go f.gcLoop()
+	if cfg.warmup {
+		go f.warmupHandshake()
+	}
 	if logf != nil {
-		logf("AVPN dnsfwd: split-DNS forwarder enabled (%d suffixes)", len(cfg.suffixes))
+		logf("AVPN dnsfwd: split-DNS forwarder enabled (%d suffixes, warmup=%v)", len(cfg.suffixes), cfg.warmup)
 	}
 	return f
+}
+
+// warmupHandshake: инжектит один прогревочный UDP-пакет в туннель сразу после подъёма, чтобы
+// WG-рукопожатие состоялось ДО первого пользовательского DNS. Иначе первый резолв не-RU домена
+// (resolveViaTunnel) — сам первый исходящий пакет — ждёт handshake round-trip и таймаутит на
+// системном резолвере: «первый запрос мимо, второй ок» (ванильная Amnezia форвардера не имеет,
+// её DNS идёт напрямую и системный резолвер сам переспрашивает). Один пакет = один
+// SendHandshakeInitiation; ответ (если 1.1.1.1 ответит) уйдёт в real и ОС его отбросит.
+func (f *fwdTun) warmupHandshake() {
+	select {
+	case <-time.After(warmupDelay):
+	case <-f.closed:
+		return
+	}
+	pkt := buildUDP4(f.cfg.clientIP, f.cfg.tunnelSrv, warmupSport, 53, warmupDNSQuery())
+	select {
+	case f.out <- pkt:
+	case <-f.closed:
+	}
+}
+
+// warmupDNSQuery: минимальный валидный DNS-запрос (root «.», A/IN) — payload прогревочного пакета.
+// Содержимое неважно (цель — исходящий пакет, триггерящий рукопожатие); валидный DNS на случай,
+// если 1.1.1.1 всё же ответит (ответ безвреден — уйдёт в real на неслушаемый порт).
+func warmupDNSQuery() []byte {
+	return []byte{
+		0x77, 0x77, // id
+		0x01, 0x00, // flags: RD
+		0x00, 0x01, // QDCOUNT=1
+		0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+		0x00,       // root name «.»
+		0x00, 0x01, // QTYPE A
+		0x00, 0x01, // QCLASS IN
+	}
 }
 
 // pump: единственный читатель real. Стартует лениво из первого Read (когда известен offset).
@@ -464,11 +508,11 @@ func (f *fwdTun) Write(bufs [][]byte, offset int) (int, error) {
 	return n, err
 }
 
-func (f *fwdTun) MTU() (int, error)          { return f.real.MTU() }
-func (f *fwdTun) Name() (string, error)      { return f.real.Name() }
-func (f *fwdTun) File() *os.File             { return f.real.File() }
-func (f *fwdTun) Events() <-chan tun.Event   { return f.real.Events() }
-func (f *fwdTun) BatchSize() int             { return f.real.BatchSize() }
+func (f *fwdTun) MTU() (int, error)        { return f.real.MTU() }
+func (f *fwdTun) Name() (string, error)    { return f.real.Name() }
+func (f *fwdTun) File() *os.File           { return f.real.File() }
+func (f *fwdTun) Events() <-chan tun.Event { return f.real.Events() }
+func (f *fwdTun) BatchSize() int           { return f.real.BatchSize() }
 func (f *fwdTun) Close() error {
 	select {
 	case <-f.closed:
