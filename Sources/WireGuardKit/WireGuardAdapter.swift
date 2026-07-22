@@ -301,6 +301,28 @@ public class WireGuardAdapter {
         }
     }
 
+    /// Tribe (BUG-4 auto-heal): rebind the tunnel UDP socket to a NEW ephemeral local port on
+    /// the LIVE tunnel. UAPI `listen_port=0` -> IpcSet -> BindUpdate closes and reopens the
+    /// socket, so the next handshake goes out from a fresh 5-tuple flow (heals session-scoped
+    /// DPI blocks; equivalent of toggling airplane mode). Peers, keys and handshake state are
+    /// untouched -- this is NOT a reconfiguration.
+    /// - Parameter completionHandler: completion handler; nil error on success.
+    public func rebindListenPort(completionHandler: @escaping (WireGuardAdapterError?) -> Void) {
+        workQueue.async {
+            guard case .started(let handle, _) = self.state else {
+                self.logHandler(.error, "rebindListenPort: adapter not started (state=\(self.state))")
+                completionHandler(.invalidState)
+                return
+            }
+            wgSetConfig(handle, "listen_port=0\n")
+            #if os(iOS)
+            wgDisableSomeRoamingForBrokenMobileSemantics(handle)
+            #endif
+            self.logHandler(.verbose, "rebindListenPort: socket rebound to a new ephemeral port")
+            completionHandler(nil)
+        }
+    }
+
     // MARK: - Private methods
 
     /// Setup WireGuard log handler.
