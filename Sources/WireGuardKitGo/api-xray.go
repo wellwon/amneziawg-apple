@@ -18,7 +18,7 @@ import (
 
 	"github.com/amnezia-vpn/amnezia-libxray/nodep"
 	"github.com/amnezia-vpn/amnezia-libxray/xray"
-	"github.com/amnezia-vpn/amnezia-xray-core/transport/internet"
+	"github.com/xtls/xray-core/transport/internet"
 )
 
 // Read geo data and cut the codes we need.
