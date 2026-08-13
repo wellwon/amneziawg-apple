@@ -104,13 +104,17 @@ extension TunnelConfiguration {
                         "maxhandshakeattempts",
                     ]
                     let peerSectionKeys: Set<String> = ["publickey", "presharedkey", "allowedips", "endpoint", "persistentkeepalive"]
+                    // AVPN: unknown keys are logged and skipped instead of failing the whole
+                    // config — a future protocol key must not brick tunnels on older builds.
                     if parserState == .inInterfaceSection {
-                        guard interfaceSectionKeys.contains(key) else {
-                            throw ParseError.interfaceHasUnrecognizedKey(keyWithCase)
+                        if !interfaceSectionKeys.contains(key) {
+                            NSLog("WgQuickConfig: skipping unrecognized interface key '%@'", keyWithCase)
+                            attributes.removeValue(forKey: key)
                         }
                     } else if parserState == .inPeerSection {
-                        guard peerSectionKeys.contains(key) else {
-                            throw ParseError.peerHasUnrecognizedKey(keyWithCase)
+                        if !peerSectionKeys.contains(key) {
+                            NSLog("WgQuickConfig: skipping unrecognized peer key '%@'", keyWithCase)
+                            attributes.removeValue(forKey: key)
                         }
                     }
                 } else if lowercasedLine != "[interface]" && lowercasedLine != "[peer]" {

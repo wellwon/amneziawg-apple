@@ -22,7 +22,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/amnezia-vpn/amneziawg-go/tun"
+	"github.com/amnezia-vpn/amneziawg-go/v3/tun"
 )
 
 // ── конфиг (ставится из Swift до wgTurnOn) ────────────────────────────────────────────────────
